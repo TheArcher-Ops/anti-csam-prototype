@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anti-CSAM Detection · Alert Queue</title>
+<style>
+  /* ── Reset & base ─────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:       #0b1120;
+    --surface:  #131d30;
+    --surface2: #1a2640;
+    --border:   #243354;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --accent:   #3b82f6;
+
+    --high:     #ef4444;
+    --high-bg:  rgba(239,68,68,.12);
+    --high-bd:  rgba(239,68,68,.35);
+
+    --med:      #f59e0b;
+    --med-bg:   rgba(245,158,11,.12);
+    --med-bd:   rgba(245,158,11,.35);
+
+    --low:      #22c55e;
+    --low-bg:   rgba(34,197,94,.10);
+    --low-bd:   rgba(34,197,94,.30);
+
+    --fin:      #a78bfa;
+    --nlp:      #38bdf8;
+
+    --bar-h:    6px;
+    --radius:   8px;
+    --panel-w:  420px;
+  }
+
+  html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; }
+
+  /* ── Layout ───────────────────────────────────────────────────── */
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .3px; white-space: nowrap; }
+  header h1 span { color: var(--accent); }
+
+  .stats-row { display: flex; gap: 12px; margin-left: auto; align-items: center; flex-wrap: wrap; }
+  .stat-pill {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 99px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .stat-pill.total  { background: var(--surface2); border: 1px solid var(--border); }
+  .stat-pill.high   { background: var(--high-bg);  border: 1px solid var(--high-bd); color: var(--high); }
+  .stat-pill.medium { background: var(--med-bg);   border: 1px solid var(--med-bd);  color: var(--med); }
+  .stat-pill.low    { background: var(--low-bg);   border: 1px solid var(--low-bd);  color: var(--low); }
+  .stat-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .header-actions { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    padding: 5px 12px; border-radius: var(--radius);
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); transition: background .15s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #2563eb; }
+
+  /* toolbar */
+  .toolbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex; gap: 10px; align-items: center; flex-shrink: 0;
+  }
+  .search-wrap { position: relative; flex: 1; max-width: 280px; }
+  .search-wrap input {
+    width: 100%; padding: 6px 10px 6px 30px;
+    border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: 13px;
+    outline: none;
+  }
+  .search-wrap input:focus { border-color: var(--accent); }
+  .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); pointer-events: none; font-size: 13px; }
+  .filter-group { display: flex; gap: 4px; }
+  .filter-btn {
+    padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); transition: all .15s;
+  }
+  .filter-btn.active         { background: var(--surface2); color: var(--text); border-color: var(--accent); }
+  .filter-btn.active.f-high  { background: var(--high-bg); color: var(--high); border-color: var(--high-bd); }
+  .filter-btn.active.f-med   { background: var(--med-bg);  color: var(--med);  border-color: var(--med-bd); }
+  .filter-btn.active.f-low   { background: var(--low-bg);  color: var(--low);  border-color: var(--low-bd); }
+  .filter-btn.active.f-fin   { color: var(--fin); border-color: var(--fin); }
+  .filter-btn.active.f-nlp   { color: var(--nlp); border-color: var(--nlp); }
+  .sort-select {
+    padding: 4px 8px; border-radius: var(--radius); font-size: 12px;
+    border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+    outline: none; cursor: pointer; margin-left: auto;
+  }
+  .count-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+  /* ── Main content ─────────────────────────────────────────────── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Queue panel ──────────────────────────────────────────────── */
+  #queue-panel {
+    flex: 1; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #queue-panel::-webkit-scrollbar { width: 6px; }
+  #queue-panel::-webkit-scrollbar-track { background: transparent; }
+  #queue-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Queue cards ──────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .card.tier-high::before  { background: var(--high); }
+  .card.tier-medium::before { background: var(--med); }
+  .card.tier-low::before   { background: var(--low); }
+
+  .card:hover { background: var(--surface2); border-color: #3a4d6e; }
+  .card.selected { border-color: var(--accent); background: var(--surface2); }
+
+  .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .entity-id { font-weight: 600; font-size: 13px; font-family: 'Consolas', monospace;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .badge {
+    padding: 2px 7px; border-radius: 99px; font-size: 11px; font-weight: 700;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .badge.tier-high   { background: var(--high-bg); color: var(--high); border: 1px solid var(--high-bd); }
+  .badge.tier-medium { background: var(--med-bg);  color: var(--med);  border: 1px solid var(--med-bd); }
+  .badge.tier-low    { background: var(--low-bg);  color: var(--low);  border: 1px solid var(--low-bd); }
+  .badge.type-fin    { background: rgba(167,139,250,.12); color: var(--fin); border: 1px solid rgba(167,139,250,.3); }
+  .badge.type-nlp    { background: rgba(56,189,248,.10);  color: var(--nlp); border: 1px solid rgba(56,189,248,.3); }
+
+  .card-score-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .score-num { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+    line-height: 1; flex-shrink: 0; }
+  .score-num.tier-high   { color: var(--high); }
+  .score-num.tier-medium { color: var(--med); }
+  .score-num.tier-low    { color: var(--low); }
+
+  .mini-bars { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .mini-bar-row { display: flex; align-items: center; gap: 5px; }
+  .mini-bar-label { font-size: 10px; color: var(--muted); width: 52px; flex-shrink: 0; text-align: right; }
+  .mini-bar-track { flex: 1; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+  .mini-bar-fill  { height: 100%; border-radius: 2px; background: var(--accent); transition: width .3s; }
+
+  .card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 500;
+    background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── Detail panel ─────────────────────────────────────────────── */
+  #detail-panel {
+    width: var(--panel-w);
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  #detail-panel::-webkit-scrollbar { width: 6px; }
+  #detail-panel::-webkit-scrollbar-track { background: transparent; }
+  #detail-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .detail-empty {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--muted); gap: 10px; padding: 40px;
+    text-align: center;
+  }
+  .detail-empty svg { opacity: .25; }
+  .detail-empty p { font-size: 13px; line-height: 1.5; }
+
+  .detail-header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--surface); z-index: 5;
+  }
+  .detail-header-top { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+  .detail-entity-id { font-family: 'Consolas', monospace; font-weight: 700; font-size: 14px;
+    flex: 1; word-break: break-all; }
+  .detail-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .detail-score-block { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+  .detail-big-score { font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums;
+    line-height: 1; }
+  .detail-big-score.tier-high   { color: var(--high); }
+  .detail-big-score.tier-medium { color: var(--med); }
+  .detail-big-score.tier-low    { color: var(--low); }
+  .detail-score-label { font-size: 12px; color: var(--muted); }
+
+  .detail-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; }
+
+  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted); margin-bottom: 8px; }
+
+  /* Dimension bars */
+  .dim-bars { display: flex; flex-direction: column; gap: 8px; }
+  .dim-row { display: flex; flex-direction: column; gap: 3px; }
+  .dim-row-top { display: flex; justify-content: space-between; align-items: center; }
+  .dim-name { font-size: 12px; font-weight: 500; }
+  .dim-val { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bar-track { height: var(--bar-h); background: var(--surface2); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+  .bar-fill.high  { background: linear-gradient(90deg, #dc2626, #ef4444); }
+  .bar-fill.med   { background: linear-gradient(90deg, #d97706, #f59e0b); }
+  .bar-fill.low   { background: linear-gradient(90deg, #16a34a, #22c55e); }
+  .bar-fill.blue  { background: linear-gradient(90deg, #2563eb, #3b82f6); }
+  .bar-fill.purple{ background: linear-gradient(90deg, #7c3aed, #a78bfa); }
+  .bar-fill.cyan  { background: linear-gradient(90deg, #0284c7, #38bdf8); }
+
+  /* Evidence tables */
+  .ev-table { width: 100%; border-collapse: collapse; }
+  .ev-table td { padding: 5px 4px; font-size: 12px; border-bottom: 1px solid var(--border); }
+  .ev-table td:first-child { color: var(--muted); width: 55%; }
+  .ev-table td:last-child { font-weight: 600; font-family: 'Consolas', monospace; text-align: right; }
+  .ev-table tr:last-child td { border-bottom: none; }
+
+  .ev-section { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 12px; }
+  .ev-section-title { font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; display: flex;
+    align-items: center; gap: 6px; }
+  .ev-icon { font-size: 14px; }
+
+  /* Tag list */
+  .tags-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tag-detail { padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 600;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+
+  /* Text snippet */
+  .snippet-box { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 12px; font-size: 12px;
+    color: var(--muted); line-height: 1.6; font-style: italic; }
+
+  /* Meta row */
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .meta-cell { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px; }
+  .meta-cell-label { font-size: 10px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .5px; margin-bottom: 3px; }
+  .meta-cell-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ── Load overlay ─────────────────────────────────────────────── */
+  #load-overlay {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; flex-direction: column; gap: 20px;
+  }
+  .load-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 32px 36px; max-width: 460px; width: 90%;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .load-card h2 { font-size: 16px; font-weight: 700; }
+  .load-card p  { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .file-row { display: flex; flex-direction: column; gap: 6px; }
+  .file-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .file-input-wrap { display: flex; gap: 8px; align-items: center; }
+  .file-name { flex: 1; font-size: 12px; padding: 6px 10px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface2); color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-name.loaded { color: var(--low); border-color: var(--low-bd); }
+  input[type=file] { display: none; }
+  .load-divider { height: 1px; background: var(--border); }
+  .load-error { font-size: 12px; color: var(--high); display: none; }
+
+  /* ── Empty queue ──────────────────────────────────────────────── */
+  .queue-empty { flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px; }
+
+  /* ── Scrollbar global ─────────────────────────────────────────── */
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+
+  /* ── Responsive collapse ──────────────────────────────────────── */
+  @media (max-width: 780px) {
+    #detail-panel { display: none; }
+    #detail-panel.mobile-show { display: flex; position: fixed; inset: 56px 0 0 0;
+      width: 100%; z-index: 50; }
+    .back-btn { display: flex !important; }
+  }
+  .back-btn { display: none; align-items: center; gap: 6px; padding: 8px 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    cursor: pointer; font-size: 13px; color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ── Load overlay ──────────────────────────────────────────────── -->
+<div id="load-overlay">
+  <div class="load-card">
+    <h2>Load Detection Results</h2>
+    <p>Select the JSON output files generated by the detection engines.
+       Place this file in the same folder as <code>data/</code> to use auto-load,
+       or pick files manually below.</p>
+
+    <div class="file-row">
+      <div class="file-label">Financial Engine — risk_scores.json</div>
+      <div class="file-input-wrap">
+        <div class="file-name" id="fin-name">No file selected</div>
+        <button class="btn" onclick="document.getElementById('fin-input').click()">Browse</button>
+        <input type="file" id="fin-input" accept=".json" onchange="handleFile('fin', this)">
+      </div>
+    </div>
+
+    <div class="file-row">
+      <div class="file-label">NLP Classifier — nlp_scores.json</div>
+      <div class="file-input-wrap">
+        <div class="file-name" id="nlp-name">No file selected</div>
+        <button class="btn" onclick="document.getElementById('nlp-input').click()">Browse</button>
+        <input type="file" id="nlp-input" accept=".json" onchange="handleFile('nlp', this)">
+      </div>
+    </div>
+
+    <div class="load-divider"></div>
+    <div class="load-error" id="load-error"></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn primary" style="flex:1" onclick="loadFiles()">Load Files</button>
+      <button class="btn" onclick="loadDemo()">Load Demo Data</button>
+    </div>
+    <p style="font-size:11px; color:var(--muted); text-align:center;">
+      Or serve this file from a local web server — it will auto-fetch <code>../data/</code>
+    </p>
+  </div>
+</div>
+
+<!-- ── App shell ─────────────────────────────────────────────────── -->
+<div id="app" style="display:none">
+  <header>
+    <h1>Anti-CSAM · <span>Alert Queue</span></h1>
+    <div class="stats-row">
+      <div class="stat-pill total"><span id="stat-total">0</span> total</div>
+      <div class="stat-pill high"><span class="stat-dot"></span><span id="stat-high">0</span> HIGH</div>
+      <div class="stat-pill medium"><span class="stat-dot"></span><span id="stat-med">0</span> MED</div>
+      <div class="stat-pill low"><span class="stat-dot"></span><span id="stat-low">0</span> LOW</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn" onclick="showOverlay()">↑ Reload</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="Search entity ID or tag…" oninput="applyFilters()">
+    </div>
+    <div class="filter-group" id="tier-filters">
+      <button class="filter-btn active f-high"  data-tier="high"   onclick="toggleFilter(this,'tier')">HIGH</button>
+      <button class="filter-btn active f-med"   data-tier="medium" onclick="toggleFilter(this,'tier')">MED</button>
+      <button class="filter-btn active f-low"   data-tier="low"    onclick="toggleFilter(this,'tier')">LOW</button>
+    </div>
+    <div class="filter-group" id="type-filters">
+      <button class="filter-btn active f-fin" data-type="financial" onclick="toggleFilter(this,'type')">Financial</button>
+      <button class="filter-btn active f-nlp" data-type="nlp"       onclick="toggleFilter(this,'type')">NLP</button>
+    </div>
+    <select class="sort-select" id="sort-select" onchange="applyFilters()">
+      <option value="score-desc">Score ↓</option>
+      <option value="score-asc">Score ↑</option>
+      <option value="id-asc">ID A→Z</option>
+    </select>
+    <span class="count-label" id="count-label">0 alerts</span>
+  </div>
+
+  <div class="main">
+    <div id="queue-panel"></div>
+
+    <div id="detail-panel">
+      <div class="back-btn" id="back-btn" onclick="closeDetail()">← Back</div>
+      <div class="detail-empty" id="detail-empty">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          <path d="M11 8v3m0 3h.01"/>
+        </svg>
+        <p>Select an alert from the queue<br>to view case details</p>
+      </div>
+      <div id="detail-content" style="display:none; flex-direction:column; flex:1;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────
+let allAlerts = [];
+let activeTiers = new Set(['high','medium','low']);
+let activeTypes = new Set(['financial','nlp']);
+let selectedId  = null;
+
+// ── File loading ────────────────────────────────────────────────────────
+const fileBuffers = { fin: null, nlp: null };
+
+function handleFile(key, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const nameEl = document.getElementById(key + '-name');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      fileBuffers[key] = JSON.parse(e.target.result);
+      nameEl.textContent = file.name;
+      nameEl.classList.add('loaded');
+    } catch {
+      showError('Invalid JSON in ' + file.name);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showError(msg) {
+  const el = document.getElementById('load-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+function loadFiles() {
+  document.getElementById('load-error').style.display = 'none';
+  if (!fileBuffers.fin && !fileBuffers.nlp) {
+    showError('Please select at least one file.'); return;
+  }
+  const combined = mergeData(fileBuffers.fin || [], fileBuffers.nlp || []);
+  if (!combined.length) { showError('No alert records found in files.'); return; }
+  initDashboard(combined);
+}
+
+async function tryAutoFetch() {
+  // Works when served over HTTP (e.g. python -m http.server)
+  try {
+    const [finRes, nlpRes] = await Promise.all([
+      fetch('../data/risk_scores.json'),
+      fetch('../data/nlp_scores.json'),
+    ]);
+    if (!finRes.ok || !nlpRes.ok) return false;
+    const [finData, nlpData] = await Promise.all([finRes.json(), nlpRes.json()]);
+    initDashboard(mergeData(finData, nlpData));
+    return true;
+  } catch { return false; }
+}
+
+// ── Demo data ───────────────────────────────────────────────────────────
+function loadDemo() {
+  const fin = generateDemoFin(120);
+  const nlp = generateDemoNlp(90);
+  initDashboard(mergeData(fin, nlp));
+}
+
+function rnd(lo, hi) { return lo + Math.random() * (hi - lo); }
+function pick(arr)   { return arr[Math.floor(Math.random() * arr.length)]; }
+function uid(pre)    { return pre + '_' + Math.random().toString(36).slice(2,10); }
+
+function generateDemoFin(n) {
+  const dims = ['star_topology','payment_clustering','geo_mismatch','platform_hopping'];
+  const patterns = [['star_topology'],['payment_clustering','structuring'],
+                    ['geo_mismatch','cashout'],['platform_hopping']];
+  return Array.from({length:n}, (_, i) => {
+    const isHigh = i < Math.floor(n * 0.15);
+    const isMed  = !isHigh && i < Math.floor(n * 0.40);
+    const base   = isHigh ? rnd(0.60,0.95) : isMed ? rnd(0.35,0.60) : rnd(0.05,0.35);
+    const ds = {};
+    dims.forEach(d => ds[d] = Math.min(1, Math.max(0, base + rnd(-0.15,0.15))));
+    const tags = isHigh ? pick(patterns) : [];
+    return {
+      node_id: uid('NODE'),
+      composite_score: +base.toFixed(4),
+      dimension_scores: {
+        star_topology: +ds.star_topology.toFixed(4),
+        payment_clustering: +ds.payment_clustering.toFixed(4),
+        geo_mismatch: +ds.geo_mismatch.toFixed(4),
+        platform_hopping: +ds.platform_hopping.toFixed(4),
+      },
+      evidence: {
+        star_topology: isHigh ? {unique_payers: Math.floor(rnd(6,18)), mean_amount: +rnd(40,150).toFixed(2), amount_cv: +rnd(0.01,0.08).toFixed(3), window_start:'2024-03-12T22:00:00', window_end:'2024-03-12T23:45:00'} : {},
+        payment_clustering: isHigh ? {structured_txs: Math.floor(rnd(2,8)), total_incoming_txs: Math.floor(rnd(8,20)), structuring_ratio: +rnd(0.2,0.7).toFixed(3), layering_score: +rnd(0.1,0.9).toFixed(3)} : {},
+        geo_mismatch: isHigh ? {foreign_payers: Math.floor(rnd(1,5)), domestic_payers: Math.floor(rnd(2,8)), round_trips_24h: Math.floor(rnd(0,4)), cross_border_in_ratio: +rnd(0.1,0.9).toFixed(3), cross_border_out_ratio: +rnd(0.1,0.9).toFixed(3), round_trip_ratio: +rnd(0.0,0.5).toFixed(3)} : {},
+        platform_hopping: isHigh ? {max_platforms_per_payer: Math.floor(rnd(3,7)), multi_platform_payers: Math.floor(rnd(1,4)), distinct_platforms_total: Math.floor(rnd(3,7)), platforms: ['CashApp','Venmo','Crypto','MoneyGram'].slice(0,Math.floor(rnd(2,5)))} : {},
+      },
+      in_degree: Math.floor(rnd(2,25)),
+      out_degree: Math.floor(rnd(0,8)),
+      total_received_usd: +rnd(200, 12000).toFixed(2),
+      pattern_tags: tags,
+    };
+  });
+}
+
+function generateDemoNlp(n) {
+  const allTags = [['coded_language_rhythm','negotiation_burst'],['platform_hopping_comms'],['late_night_burst']];
+  return Array.from({length:n}, (_, i) => {
+    const isHigh = i < Math.floor(n * 0.15);
+    const isMed  = !isHigh && i < Math.floor(n * 0.40);
+    const base   = isHigh ? rnd(0.62,0.96) : isMed ? rnd(0.35,0.62) : rnd(0.04,0.35);
+    const tier   = base >= 0.60 ? 'high' : base >= 0.35 ? 'medium' : 'low';
+    const tags   = isHigh ? pick(allTags) : [];
+    return {
+      session_id: uid('SES'),
+      ensemble_score: +base.toFixed(4),
+      text_score: +Math.min(1, base + rnd(-0.12,0.12)).toFixed(4),
+      rhythm_score: +Math.min(1, base + rnd(-0.10,0.10)).toFixed(4),
+      risk_tier: tier,
+      ground_truth: isHigh,
+      pattern_tags: tags,
+      rhythm_features: {
+        msg_count: Math.floor(rnd(5,80)),
+        duration_sec: +rnd(120,7200).toFixed(1),
+        msg_density: +rnd(0.1,8).toFixed(3),
+        gap_cv: +rnd(0.1,3.5).toFixed(3),
+        rapid_ratio: +rnd(0,0.9).toFixed(3),
+        night_session: Math.random() > 0.5 ? 1 : 0,
+        n_platforms: Math.floor(rnd(1,5)),
+        max_silence_ratio: +rnd(0,0.7).toFixed(3),
+        negotiation_signal: +rnd(0,3.5).toFixed(3),
+      },
+      synthetic_text_snippet: isHigh
+        ? pick(['new girl available tonight . contact through the link . rates in the message . delete after reading',
+                'fresh listings posted . screening completed . deposit first no exceptions . incall downtown discreet',
+                'she\'s ready to work . use the other number . going dark for a bit . switch to app'])
+        : pick(['hey what\'s up . sounds good . talk later . birthday dinner tonight',
+                'running late . pick you up at 7 . the weather is great . call me when free',
+                'see you tomorrow . long day at work . got your message . catch you later']),
+    };
+  });
+}
+
+// ── Data merging ────────────────────────────────────────────────────────
+function mergeData(finData, nlpData) {
+  const fin = (finData || []).map(r => ({
+    ...r,
+    _id:    r.node_id,
+    _type:  'financial',
+    _score: r.composite_score,
+    _tier:  scoreTier(r.composite_score),
+    _tags:  r.pattern_tags || [],
+  }));
+  const nlp = (nlpData || []).map(r => ({
+    ...r,
+    _id:    r.session_id,
+    _type:  'nlp',
+    _score: r.ensemble_score,
+    _tier:  scoreTier(r.ensemble_score),
+    _tags:  r.pattern_tags || [],
+  }));
+  return [...fin, ...nlp];
+}
+
+function scoreTier(s) {
+  return s >= 0.60 ? 'high' : s >= 0.35 ? 'medium' : 'low';
+}
+
+// ── Dashboard init ──────────────────────────────────────────────────────
+function initDashboard(alerts) {
+  allAlerts = alerts;
+  document.getElementById('load-overlay').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  updateStats();
+  applyFilters();
+}
+
+function showOverlay() {
+  document.getElementById('load-overlay').style.display = 'flex';
+}
+
+function updateStats() {
+  const h = allAlerts.filter(a => a._tier === 'high').length;
+  const m = allAlerts.filter(a => a._tier === 'medium').length;
+  const l = allAlerts.filter(a => a._tier === 'low').length;
+  document.getElementById('stat-total').textContent = allAlerts.length;
+  document.getElementById('stat-high').textContent  = h;
+  document.getElementById('stat-med').textContent   = m;
+  document.getElementById('stat-low').textContent   = l;
+}
+
+// ── Filters & sort ──────────────────────────────────────────────────────
+function toggleFilter(btn, group) {
+  const val = btn.dataset.tier || btn.dataset.type;
+  const set  = group === 'tier' ? activeTiers : activeTypes;
+  if (set.has(val)) { set.delete(val); btn.classList.remove('active'); }
+  else              { set.add(val);    btn.classList.add('active'); }
+  applyFilters();
+}
+
+function applyFilters() {
+  const q    = document.getElementById('search-input').value.toLowerCase();
+  const sort = document.getElementById('sort-select').value;
+
+  let filtered = allAlerts.filter(a => {
+    if (!activeTiers.has(a._tier))  return false;
+    if (!activeTypes.has(a._type))  return false;
+    if (q && !a._id.toLowerCase().includes(q) &&
+        !a._tags.join(' ').toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  if (sort === 'score-desc') filtered.sort((a,b) => b._score - a._score);
+  else if (sort === 'score-asc') filtered.sort((a,b) => a._score - b._score);
+  else filtered.sort((a,b) => a._id.localeCompare(b._id));
+
+  document.getElementById('count-label').textContent = `${filtered.length} alert${filtered.length !== 1 ? 's' : ''}`;
+  renderQueue(filtered);
+}
+
+// ── Queue rendering ─────────────────────────────────────────────────────
+const TIER_LABELS  = { high:'HIGH RISK', medium:'MEDIUM', low:'LOW' };
+const FIN_DIMS = [
+  ['Star',    'star_topology'],
+  ['Cluster', 'payment_clustering'],
+  ['Geo',     'geo_mismatch'],
+  ['Hop',     'platform_hopping'],
+];
+const NLP_DIMS = [
+  ['Text',   'text_score'],
+  ['Rhythm', 'rhythm_score'],
+];
+
+function renderQueue(alerts) {
+  const panel = document.getElementById('queue-panel');
+  if (!alerts.length) {
+    panel.innerHTML = '<div class="queue-empty">No alerts match the current filters</div>';
+    return;
+  }
+  panel.innerHTML = alerts.map(a => cardHTML(a)).join('');
+  // Bind click events
+  panel.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', () => selectAlert(card.dataset.id));
+  });
+  // Re-highlight selected
+  if (selectedId) {
+    const sel = panel.querySelector(`[data-id="${selectedId}"]`);
+    if (sel) sel.classList.add('selected');
+  }
+}
+
+function cardHTML(a) {
+  const dims = a._type === 'financial'
+    ? FIN_DIMS.map(([lbl, key]) => ({ lbl, val: a.dimension_scores?.[key] ?? 0 }))
+    : NLP_DIMS.map(([lbl, key]) => ({ lbl, val: a[key] ?? 0 }));
+
+  const miniBars = dims.map(d => `
+    <div class="mini-bar-row">
+      <span class="mini-bar-label">${d.lbl}</span>
+      <div class="mini-bar-track">
+        <div class="mini-bar-fill" style="width:${(d.val*100).toFixed(1)}%;
+          background:${barColor(d.val)}"></div>
+      </div>
+    </div>`).join('');
+
+  const tags = a._tags.map(t => `<span class="tag">${t.replace(/_/g,' ')}</span>`).join('');
+
+  return `
+  <div class="card tier-${a._tier} ${a._id === selectedId ? 'selected' : ''}" data-id="${a._id}">
+    <div class="card-top">
+      <div class="entity-id">${esc(a._id)}</div>
+      <span class="badge tier-${a._tier}">${TIER_LABELS[a._tier]}</span>
+      <span class="badge type-${a._type === 'financial' ? 'fin' : 'nlp'}">${a._type === 'financial' ? 'Financial' : 'NLP'}</span>
+    </div>
+    <div class="card-score-row">
+      <span class="score-num tier-${a._tier}">${(a._score * 100).toFixed(0)}</span>
+      <div class="mini-bars">${miniBars}</div>
+    </div>
+    ${tags ? `<div class="card-tags">${tags}</div>` : ''}
+  </div>`;
+}
+
+// ── Detail panel ────────────────────────────────────────────────────────
+function selectAlert(id) {
+  selectedId = id;
+  // Update card selection
+  document.querySelectorAll('.card').forEach(c => {
+    c.classList.toggle('selected', c.dataset.id === id);
+  });
+  const alert = allAlerts.find(a => a._id === id);
+  if (!alert) return;
+
+  document.getElementById('detail-empty').style.display   = 'none';
+  const content = document.getElementById('detail-content');
+  content.style.display = 'flex';
+  content.innerHTML = alert._type === 'financial'
+    ? renderFinDetail(alert)
+    : renderNlpDetail(alert);
+
+  // Mobile: show panel
+  document.getElementById('detail-panel').classList.add('mobile-show');
+}
+
+function closeDetail() {
+  selectedId = null;
+  document.getElementById('detail-panel').classList.remove('mobile-show');
+}
+
+function barColor(v) {
+  if (v >= 0.60) return 'linear-gradient(90deg,#dc2626,#ef4444)';
+  if (v >= 0.35) return 'linear-gradient(90deg,#d97706,#f59e0b)';
+  return 'linear-gradient(90deg,#16a34a,#22c55e)';
+}
+
+function dimBarClass(v) {
+  return v >= 0.60 ? 'high' : v >= 0.35 ? 'med' : 'low';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtNum(v, dec=2) {
+  if (v == null) return '—';
+  return Number(v).toFixed(dec);
+}
+
+function fmtUSD(v) {
+  if (v == null) return '—';
+  return '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function detailHeader(a, subtitle) {
+  return `
+  <div class="detail-header">
+    <div class="detail-header-top">
+      <div class="detail-entity-id">${esc(a._id)}</div>
+    </div>
+    <div class="detail-badges" style="margin-bottom:10px">
+      <span class="badge tier-${a._tier}">${TIER_LABELS[a._tier]}</span>
+      <span class="badge type-${a._type === 'financial' ? 'fin' : 'nlp'}">${a._type === 'financial' ? 'Financial' : 'NLP'}</span>
+      ${subtitle ? `<span class="badge" style="background:var(--surface2);color:var(--muted)">${esc(subtitle)}</span>` : ''}
+    </div>
+    <div class="detail-score-block">
+      <span class="detail-big-score tier-${a._tier}">${(a._score * 100).toFixed(1)}</span>
+      <span class="detail-score-label">/ 100 composite risk score</span>
+    </div>
+  </div>`;
+}
+
+function dimBarsHTML(dims) {
+  return `<div class="dim-bars">` + dims.map(([label, val, cls]) => `
+    <div class="dim-row">
+      <div class="dim-row-top">
+        <span class="dim-name">${label}</span>
+        <span class="dim-val" style="color:${val>=0.6?'var(--high)':val>=0.35?'var(--med)':'var(--low)'}">${(val*100).toFixed(1)}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill ${cls||dimBarClass(val)}" style="width:${(val*100).toFixed(1)}%"></div></div>
+    </div>`).join('') + `</div>`;
+}
+
+function evSectionHTML(icon, title, rows) {
+  const filtered = rows.filter(([,v]) => v != null && v !== '' && v !== undefined);
+  if (!filtered.length) return '';
+  return `
+  <div class="ev-section">
+    <div class="ev-section-title"><span class="ev-icon">${icon}</span>${title}</div>
+    <table class="ev-table">${filtered.map(([k,v]) =>
+      `<tr><td>${k}</td><td>${esc(String(v))}</td></tr>`
+    ).join('')}</table>
+  </div>`;
+}
+
+// ── Financial detail ────────────────────────────────────────────────────
+function renderFinDetail(a) {
+  const ds  = a.dimension_scores || {};
+  const ev  = a.evidence || {};
+  const es  = ev.star_topology || {};
+  const ec  = ev.payment_clustering || {};
+  const eg  = ev.geo_mismatch || {};
+  const eh  = ev.platform_hopping || {};
+
+  const tags = (a._tags||[]).map(t => `<span class="tag-detail">${t.replace(/_/g,' ')}</span>`).join('');
+
+  return detailHeader(a) + `
+  <div class="detail-body">
+    <div>
+      <div class="section-title">Dimension Scores</div>
+      ${dimBarsHTML([
+        ['Star Topology',       ds.star_topology      ?? 0],
+        ['Payment Clustering',  ds.payment_clustering ?? 0],
+        ['Geo Mismatch',        ds.geo_mismatch       ?? 0],
+        ['Platform Hopping',    ds.platform_hopping   ?? 0],
+      ])}
+    </div>
+
+    <div class="meta-grid">
+      <div class="meta-cell">
+        <div class="meta-cell-label">Incoming Txs</div>
+        <div class="meta-cell-value">${a.in_degree ?? '—'}</div>
+      </div>
+      <div class="meta-cell">
+        <div class="meta-cell-label">Outgoing Txs</div>
+        <div class="meta-cell-value">${a.out_degree ?? '—'}</div>
+      </div>
+      <div class="meta-cell" style="grid-column:span 2">
+        <div class="meta-cell-label">Total Received</div>
+        <div class="meta-cell-value">${fmtUSD(a.total_received_usd)}</div>
+      </div>
+    </div>
+
+    ${Object.keys(es).length ? evSectionHTML('★', 'Star Topology Evidence', [
+      ['Window start',     es.window_start],
+      ['Window end',       es.window_end],
+      ['Unique payers',    es.unique_payers],
+      ['Mean amount',      es.mean_amount != null ? fmtUSD(es.mean_amount) : null],
+      ['Amount CV',        es.amount_cv != null ? fmtNum(es.amount_cv, 4) : null],
+    ]) : ''}
+
+    ${Object.keys(ec).length ? evSectionHTML('₿', 'Payment Clustering Evidence', [
+      ['Structured txs',     ec.structured_txs],
+      ['Total incoming txs', ec.total_incoming_txs],
+      ['Structuring ratio',  ec.structuring_ratio != null ? (ec.structuring_ratio*100).toFixed(1)+'%' : null],
+      ['Layering score',     ec.layering_score != null ? fmtNum(ec.layering_score, 3) : null],
+    ]) : ''}
+
+    ${Object.keys(eg).length ? evSectionHTML('✈', 'Geo Mismatch Evidence', [
+      ['Domestic payers',       eg.domestic_payers],
+      ['Foreign payers',        eg.foreign_payers],
+      ['Foreign out txs',       eg.foreign_out_txs],
+      ['Round-trips <24h',      eg.round_trips_24h],
+      ['Cross-border in ratio', eg.cross_border_in_ratio != null ? (eg.cross_border_in_ratio*100).toFixed(1)+'%' : null],
+      ['Cross-border out ratio',eg.cross_border_out_ratio != null ? (eg.cross_border_out_ratio*100).toFixed(1)+'%' : null],
+    ]) : ''}
+
+    ${Object.keys(eh).length ? evSectionHTML('↔', 'Platform Hopping Evidence', [
+      ['Max platforms / payer', eh.max_platforms_per_payer],
+      ['Multi-platform payers', eh.multi_platform_payers],
+      ['Distinct platforms',    eh.distinct_platforms_total],
+      ['Platforms seen',        Array.isArray(eh.platforms) ? eh.platforms.join(', ') : eh.platforms],
+    ]) : ''}
+
+    ${tags ? `<div><div class="section-title">Pattern Tags</div><div class="tags-wrap">${tags}</div></div>` : ''}
+  </div>`;
+}
+
+// ── NLP detail ──────────────────────────────────────────────────────────
+function renderNlpDetail(a) {
+  const rf = a.rhythm_features || {};
+
+  const tags = (a._tags||[]).map(t => `<span class="tag-detail">${t.replace(/_/g,' ')}</span>`).join('');
+
+  const rhythmRows = [
+    ['Message count',      rf.msg_count != null ? Math.round(rf.msg_count) : null],
+    ['Duration (sec)',     rf.duration_sec != null ? fmtNum(rf.duration_sec, 0) : null],
+    ['Msg density (msg/min)', rf.msg_density != null ? fmtNum(rf.msg_density, 2) : null],
+    ['Gap CV',             rf.gap_cv != null ? fmtNum(rf.gap_cv, 3) : null],
+    ['Rapid-fire ratio',   rf.rapid_ratio != null ? (rf.rapid_ratio*100).toFixed(1)+'%' : null],
+    ['Max silence ratio',  rf.max_silence_ratio != null ? fmtNum(rf.max_silence_ratio, 3) : null],
+    ['Night session',      rf.night_session != null ? (rf.night_session ? 'Yes ⚠' : 'No') : null],
+    ['Platform hops',      rf.n_platforms != null ? Math.round(rf.n_platforms) : null],
+    ['Negotiation signal', rf.negotiation_signal != null ? fmtNum(rf.negotiation_signal, 3) : null],
+  ];
+
+  const gtLabel = a.ground_truth != null
+    ? `<span class="badge" style="background:${a.ground_truth ? 'var(--high-bg)' : 'var(--low-bg)'}; color:${a.ground_truth ? 'var(--high)' : 'var(--low)'}; border-color:${a.ground_truth ? 'var(--high-bd)' : 'var(--low-bd)'}">
+        ${a.ground_truth ? 'True Positive' : 'False Positive'}
+       </span>` : '';
+
+  return detailHeader(a, a.risk_tier?.toUpperCase()) + `
+  <div class="detail-body">
+    <div>
+      <div class="section-title">Signal Scores</div>
+      ${dimBarsHTML([
+        ['Text Signal (TF-IDF + LR)',         a.text_score   ?? 0, 'purple'],
+        ['Rhythm Signal (GradientBoosting)',   a.rhythm_score ?? 0, 'cyan'],
+        ['Ensemble (45% text + 55% rhythm)',  a._score       ?? 0],
+      ])}
+    </div>
+
+    <div class="meta-grid">
+      <div class="meta-cell">
+        <div class="meta-cell-label">Text Score</div>
+        <div class="meta-cell-value">${((a.text_score??0)*100).toFixed(1)}</div>
+      </div>
+      <div class="meta-cell">
+        <div class="meta-cell-label">Rhythm Score</div>
+        <div class="meta-cell-value">${((a.rhythm_score??0)*100).toFixed(1)}</div>
+      </div>
+      ${a.ground_truth != null ? `
+      <div class="meta-cell" style="grid-column:span 2">
+        <div class="meta-cell-label">Ground Truth (synthetic)</div>
+        <div style="margin-top:4px">${gtLabel}</div>
+      </div>` : ''}
+    </div>
+
+    ${evSectionHTML('⏱', 'Rhythm Features', rhythmRows)}
+
+    ${a.synthetic_text_snippet ? `
+    <div>
+      <div class="section-title">Synthetic Message Snippet</div>
+      <div class="snippet-box">"${esc(a.synthetic_text_snippet)}"</div>
+    </div>` : ''}
+
+    ${tags ? `<div><div class="section-title">Pattern Tags</div><div class="tags-wrap">${tags}</div></div>` : ''}
+  </div>`;
+}
+
+// ── Boot ────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  const autoLoaded = await tryAutoFetch();
+  if (!autoLoaded) {
+    // Overlay stays visible — user picks files or loads demo
+  }
+});
+</script>
+</body>
+</html>
