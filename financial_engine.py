@@ -24,6 +24,9 @@ Outputs
 
 from __future__ import annotations
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+
 import json
 import math
 import statistics
@@ -153,7 +156,6 @@ def score_star_topology(
     for i, anchor in enumerate(in_edges):
         window_end = anchor["dt"] + timedelta(hours=STAR_WINDOW_HOURS)
         window_edges = [e for e in in_edges[i:] if e["dt"] <= window_end]
-        unique_payers = {e for e in window_edges}   # each edge is a unique dict
         payer_ids = list({
             src for src, _, data in G.in_edges(recipient, data=True)
             if data["dt"] >= anchor["dt"] and data["dt"] <= window_end
@@ -583,7 +585,13 @@ def main() -> None:
     print(f"  Saved report → {report_path}")
 
     graph_path = DATA_DIR / "graph.gexf"
-    nx.write_gexf(G, str(graph_path))
+    # GEXF only supports primitive edge attributes — sanitize before export
+    G_export = G.copy()
+    for _, _, data in G_export.edges(data=True):
+        data.pop("dt", None)
+        if isinstance(data.get("pattern_tags"), list):
+            data["pattern_tags"] = ",".join(data["pattern_tags"])
+    nx.write_gexf(G_export, str(graph_path))
     print(f"  Saved graph  → {graph_path}")
 
     # Print top 10 to console

@@ -8,6 +8,9 @@ Produces:
 15% of records are injected with realistic trafficking patterns.
 """
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+
 import random
 import uuid
 import json
