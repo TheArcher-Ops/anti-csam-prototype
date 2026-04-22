@@ -137,6 +137,7 @@
     transition: border-color .15s, background .15s;
     position: relative;
     overflow: hidden;
+    flex-shrink: 0;        /* prevent flexbox from crushing card height */
   }
   .card::before {
     content: ''; position: absolute; left: 0; top: 0; bottom: 0;
@@ -151,7 +152,7 @@
 
   .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
   .entity-id { font-weight: 600; font-size: 13px; font-family: 'Consolas', monospace;
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .badge {
     padding: 2px 7px; border-radius: 99px; font-size: 11px; font-weight: 700;
@@ -666,8 +667,7 @@ function cardHTML(a) {
     <div class="mini-bar-row">
       <span class="mini-bar-label">${d.lbl}</span>
       <div class="mini-bar-track">
-        <div class="mini-bar-fill" style="width:${(d.val*100).toFixed(1)}%;
-          background:${barColor(d.val)}"></div>
+        <div class="mini-bar-fill" style="width:${(d.val*100).toFixed(1)}%;background:${barColor(d.val)}"></div>
       </div>
     </div>`).join('');
 
